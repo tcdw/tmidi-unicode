@@ -3431,7 +3431,7 @@ void check_associations(void)
 		return;
 
 	// See if .mid files are registered to TMIDI
-	RegCreateKeyEx(HKEY_CLASSES_ROOT, ".mid", 0, "", 
+	RegCreateKeyEx(HKEY_CURRENT_USER, "Software\\Classes\\.mid", 0, "", 
 		REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &key, (unsigned long *) &disposition);
 	if (key)
 	{
@@ -3463,14 +3463,16 @@ void set_associations(void)
 
 	// Set up registry entries to associate TMIDI with MIDI files
 	// Registry entry for .mid
-	RegCreateKeyEx(HKEY_CLASSES_ROOT, ".mid", 0, "", 
-		REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &key, (unsigned long *) &disposition);
+	if (RegCreateKeyEx(HKEY_CURRENT_USER, "Software\\Classes\\.mid", 0, "", 
+		REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &key, (unsigned long *) &disposition) != ERROR_SUCCESS)
+		return;
 	strcpy(buf, "TMIDI");
 	RegSetValueEx(key, "", 0, REG_SZ, (CONST BYTE *) buf, strlen(buf) + 1);
 	RegCloseKey(key);
 	// Registry key for TMIDI
-	RegCreateKeyEx(HKEY_CLASSES_ROOT, "TMIDI", 0, "", 
-		REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &tmkey, (unsigned long *) &disposition);
+	if (RegCreateKeyEx(HKEY_CURRENT_USER, "Software\\Classes\\TMIDI", 0, "", 
+		REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &tmkey, (unsigned long *) &disposition) != ERROR_SUCCESS)
+		return;
 	strcpy(buf, "TMIDI File");
 	RegSetValueEx(tmkey, "", 0, REG_SZ, (CONST BYTE *) buf, strlen(buf) + 1);
 	// Registry key for TMIDI\DefaultIcon
