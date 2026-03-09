@@ -45,9 +45,9 @@ HWND hwndStatusBar = NULL;
 HKEY key;	// handle to registry key
 HHOOK g_hhk;	// hook for tooltips
 HWND g_hwndTT;	// window handle for tooltip control
-char temp_dir[MAX_PATH] = "";
-char analysis_file[MAX_PATH] = "";
-char filename_to_load[MAX_PATH] = "";
+wchar_t temp_dir[MAX_PATH] = L"";
+wchar_t analysis_file[MAX_PATH] = L"";
+wchar_t filename_to_load[MAX_PATH] = L"";
 
 // GDI resources
 HBRUSH hNoteBackgroundBrush = NULL;
@@ -96,7 +96,7 @@ int freq;
 int hr_ms_time;
 
 typedef struct playlist_t {
-	char filename[MAX_PATH];
+	wchar_t filename[MAX_PATH];
 	struct playlist_t *prev;
 	struct playlist_t *next;
 } playlist_t;
@@ -187,7 +187,7 @@ typedef struct midi_state_t {
 	int title_displayed;				// Has the title been displayed yet?
 	channel_state_t channels[16];		// Channel state structs
 	int midi_standard;					// MIDI standard used by this MIDI file (as sysex indicates)
-	char filename[256];
+	wchar_t filename[MAX_PATH];
 } midi_state_t;
 
 typedef struct midi_text_t {

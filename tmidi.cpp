@@ -21,6 +21,7 @@
 #include <commctrl.h>
 #include <process.h>
 #include <winsock.h>
+#include <shellapi.h>
 
 #include <stdio.h>
 #include <ctype.h>
@@ -50,7 +51,7 @@ unsigned short int read_short_mem(track_header_t *th);
 unsigned int read_vlq_mem(track_header_t *th);
 // MIDI functions
 void __cdecl playback_thread(void *spointer);
-int load_midi(char *filename, HWND hDlg);
+int load_midi(wchar_t *filename, HWND hDlg);
 int analyze_midi(void);
 int process_midi_event(track_header_t *th);
 void reverse_endian_word(unsigned short int *word);
@@ -94,7 +95,7 @@ void kill_all_midi_text(void);
 midi_sysex_t *new_midi_sysex(unsigned char *data, int length, double midi_time, int track, int track_offset, int channel);
 void kill_all_midi_sysex(void);
 // Playlist functions
-playlist_t *playlist_add(char *filename);
+playlist_t *playlist_add(wchar_t *filename);
 void playlist_clear(void);
 playlist_t *playlist_remove(playlist_t *target);
 // Tracks list view functions
@@ -116,7 +117,8 @@ void hsv_to_rgb_int(int h, int s, int v, int &r, int &g, int &b);
 void hsv_to_rgb(float h, float s, float v, int *r, int *g, int *b);
 int get_scroll_value(WPARAM wParam, LPARAM lParam, int *i);
 char *stristr(char *src, char *target);
-char *extract_filename(char *filename);
+wchar_t *extract_filename(wchar_t *filename);
+wchar_t *wstristr(wchar_t *src, wchar_t *target);
 void copy_to_clipboard(char *str);
 // Tooltip functions
 LRESULT CALLBACK GetMsgProc(int nCode, WPARAM wParam, LPARAM lParam);
@@ -151,35 +153,32 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	DWORD disposition;
 	HWND hwnd;
 	COPYDATASTRUCT cds;
-	char fn[MAX_PATH];
-	char *fnptr;
+	int argc;
+	LPWSTR *argv;
 
 	ghInstance = hInstance;
 
-	// Check to see if we're being called with a filename parameter
-	if (szCmdLine[0] && szCmdLine[0] != '/')
+	// Get the wide command line and check for a filename parameter
+	argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+	if (argv && argc > 1 && argv[1][0] != L'/')
 	{
-		strncpy(fn, szCmdLine, sizeof(fn));
-		if (fn[0] == '\"')
-			fnptr = fn + 1;
-		else
-			fnptr = fn;
-		if (fnptr[strlen(fnptr) - 1] == '\"')
-			fnptr[strlen(fnptr) - 1] = '\0';
 		// Check to see if another instance of the program is running
 		hwnd = FindWindow(NULL, "TMIDI: Tom's MIDI Player");
 		cds.dwData = IPC_PLAY;
-		cds.cbData = strlen(fnptr) + 1;
-		cds.lpData = fnptr;
+		cds.cbData = (DWORD)((wcslen(argv[1]) + 1) * sizeof(wchar_t));
+		cds.lpData = argv[1];
 		if (hwnd)
 		{
 			// If so, tell that instance to play the specified file
 			SendMessage(hwnd, WM_COPYDATA, (WPARAM) hwnd, (LPARAM) &cds);
+			LocalFree(argv);
 			return 0;
 		}
 		else
-			playlist_add(fnptr);
+			playlist_add(argv[1]);
 	}
+	if (argv)
+		LocalFree(argv);
 
 	// Initialize our connection to the registry
 	RegCreateKeyEx(HKEY_CURRENT_USER, "Software\\Tom Grandgent", 0, "", 
@@ -198,9 +197,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	check_associations();
 
 	// Get the temp directory
-	GetTempPath(sizeof(temp_dir), temp_dir);
-	strcpy(analysis_file, temp_dir);
-	strcat(analysis_file, "tmidi_analysis.txt");
+	GetTempPathW(MAX_PATH, temp_dir);
+	wcscpy(analysis_file, temp_dir);
+	wcscat(analysis_file, L"tmidi_analysis.txt");
 
 	// Set process priority
 	SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
@@ -226,7 +225,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	write_registry_settings();
 
 	// Kill the analysis file
-	unlink(analysis_file);
+	_wunlink(analysis_file);
 
 	// Free GDI resources
 	free_gdi_resources();
@@ -239,8 +238,8 @@ INT_PTR CALLBACK MainDlg(HWND hDlg, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
 	static char buf[MAX_PATH + 64];
 	char *ch;
-	char filename[256] = "";
-	OPENFILENAME ofn;
+	wchar_t filename[MAX_PATH] = L"";
+	OPENFILENAMEW ofn;
 	int i, j, channel, category, instrument, ret;
 	HWND hwndcb;
 	POINT pt;
@@ -362,7 +361,7 @@ INT_PTR CALLBACK MainDlg(HWND hDlg, UINT iMsg, WPARAM wParam, LPARAM lParam)
 
 				// Clear the playlist, add this file, make it the current file, and load it up
 				playlist_clear();
-				playlist_add((char *) pcds->lpData);
+				playlist_add((wchar_t *) pcds->lpData);
 				playback_head = playlist;
 				//SetForegroundWindow(hDlg);
 				PostMessage(hDlg, WMAPP_LOADFILE, 0, 0);
@@ -406,11 +405,11 @@ INT_PTR CALLBACK MainDlg(HWND hDlg, UINT iMsg, WPARAM wParam, LPARAM lParam)
 			break;
 
 		case WMAPP_DONE_PLAYING:
-			sprintf(buf, "Stopped playing %s.", extract_filename(ms.filename));
+			sprintf(buf, "Stopped playing %ls.", extract_filename(ms.filename));
 			SetWindowText(hwndStatusBar, buf);
 			if (playback_head)
 			{
-				if (!strcmp(playback_head->filename, ms.filename))
+				if (!wcscmp(playback_head->filename, ms.filename))
 				{
 					if (ms.finished_naturally)
 					{
@@ -444,11 +443,11 @@ INT_PTR CALLBACK MainDlg(HWND hDlg, UINT iMsg, WPARAM wParam, LPARAM lParam)
 
 		case WM_DROPFILES:
 			hDrop = (HANDLE) wParam;
-			numFiles = DragQueryFile((HDROP) hDrop, 0xFFFFFFFF, NULL, 0);
+			numFiles = DragQueryFileW((HDROP) hDrop, 0xFFFFFFFF, NULL, 0);
 			playlist_clear();
 			for (i = 0; i < numFiles; i++)
 			{
-				DragQueryFile((HDROP) hDrop, i, filename, sizeof(filename));
+				DragQueryFileW((HDROP) hDrop, i, filename, MAX_PATH);
 				playlist_add(filename);
 			}
 			playback_head = playlist;
@@ -701,18 +700,18 @@ INT_PTR CALLBACK MainDlg(HWND hDlg, UINT iMsg, WPARAM wParam, LPARAM lParam)
 						if (ms.playing)
 							ms.stop_requested = 1;
 						// Get the filename from the user with the common open file dialog
-						ZeroMemory(&ofn, sizeof(OPENFILENAME));
-						ofn.lStructSize = sizeof(OPENFILENAME);
+						ZeroMemory(&ofn, sizeof(OPENFILENAMEW));
+						ofn.lStructSize = sizeof(OPENFILENAMEW);
 						ofn.hwndOwner = hDlg;
 						ofn.lpstrFile = filename;
-						ofn.nMaxFile = sizeof(filename);
-						ofn.lpstrFilter = "MIDI Files (*.mid;*.rmi)\0*.mid;*.rmi\0All Files (*.*)\0*.*\0";
+						ofn.nMaxFile = MAX_PATH;
+						ofn.lpstrFilter = L"MIDI Files (*.mid;*.rmi)\0*.mid;*.rmi\0All Files (*.*)\0*.*\0";
 						ofn.nFilterIndex = 0;
 						ofn.lpstrFileTitle = NULL;
 						ofn.nMaxFileTitle = 0;
 						ofn.lpstrInitialDir = NULL;
 						ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
-						i = GetOpenFileName(&ofn);
+						i = GetOpenFileNameW(&ofn);
 						if (i)
 							load_midi(filename, hDlg);
 						/*else
@@ -726,7 +725,7 @@ INT_PTR CALLBACK MainDlg(HWND hDlg, UINT iMsg, WPARAM wParam, LPARAM lParam)
 				case IDC_ANALYSIS:
 					if (HIWORD(wParam) == BN_CLICKED)
 					{
-						ShellExecute(hDlg, "open", "notepad", analysis_file, NULL, SW_SHOWNORMAL);
+						ShellExecuteW(hDlg, L"open", L"notepad", analysis_file, NULL, SW_SHOWNORMAL);
 					}
 					break;
 				case IDC_CURRENT_TEXT:
@@ -1052,7 +1051,7 @@ void CALLBACK MidiInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD dwInstance, DWORD dwP
 	}
 }
 
-int load_midi(char *filename, HWND hDlg)
+int load_midi(wchar_t *filename, HWND hDlg)
 {
 	FILE *infile = NULL, *outfile = NULL;
 	char *MThd = "MThd";
@@ -1069,7 +1068,7 @@ int load_midi(char *filename, HWND hDlg)
 	int success = 0;
 
 	// Save the given filename
-	strcpy(ms.filename, filename);
+	wcscpy(ms.filename, filename);
 
 	// Dump any previously-loaded MIDI text and sysex events
 	kill_all_midi_text();
@@ -1107,21 +1106,22 @@ int load_midi(char *filename, HWND hDlg)
 
 	if (ms.perform_analysis)
 	{
-		outfile = fopen(analysis_file, "w");
+		outfile = _wfopen(analysis_file, L"w");
 		if (!outfile)
 		{
 			MessageBox(hwndApp, "Unable to open file for writing.", "analysis.txt", MB_ICONERROR);
 			return 1;
 		}
 	}
-	infile = fopen(filename, "rb");
+	infile = _wfopen(filename, L"rb");
 	if (!infile)
 	{
-		MessageBox(hwndApp, "Unable to open file for reading.", filename, MB_ICONERROR);
+		sprintf(buf, "Unable to open '%ls' for reading.", filename);
+		MessageBox(hwndApp, buf, "TMIDI Error", MB_ICONERROR);
 		return 1;
 	}
 
-	if (strlen(filename) > 4 && stristr(&filename[strlen(filename) - 4], ".SYX"))
+	if (wcslen(filename) > 4 && wstristr(&filename[wcslen(filename) - 4], L".SYX"))
 	{
 		handle_sysex_dump(infile);
 		// Disable the "Display Analysis" button
@@ -1137,7 +1137,7 @@ int load_midi(char *filename, HWND hDlg)
 	__try
 	{
 	if (ms.perform_analysis)
-		fprintf(outfile, "Analysis of %s\n\n", filename);
+		fprintf(outfile, "Analysis of %ls\n\n", filename);
 
 	// Read the MIDI file header
 	read_bytes(infile, id, 4);
@@ -1158,7 +1158,7 @@ int load_midi(char *filename, HWND hDlg)
 			// Now look for MThd
 			if (memcmp(MThd, id, 4))
 			{
-				sprintf(buf, "'%s' is not a MIDI file because it does not begin with \"MThd\".", filename);
+				sprintf(buf, "'%ls' is not a MIDI file because it does not begin with \"MThd\".", filename);
 				if (ms.perform_analysis)
 					fprintf(outfile, "%s\n", buf);
 				MessageBox(hwndApp, buf, "TMIDI Error", MB_ICONERROR);
@@ -1175,8 +1175,8 @@ int load_midi(char *filename, HWND hDlg)
 					if (!memcmp(MThd, &buf[i], 4))
 						break;
 			if (len <= 4 || i == len - 4)
-			{
-				sprintf(buf, "'%s' is not a MIDI file because it does not begin with \"MThd\".", filename);
+				{
+					sprintf(buf, "'%ls' is not a MIDI file because it does not begin with \"MThd\".", filename);
 				if (ms.perform_analysis)
 					fprintf(outfile, "%s\n", buf);
 				MessageBox(hwndApp, buf, "TMIDI Error", MB_ICONERROR);
@@ -1561,13 +1561,13 @@ int load_midi(char *filename, HWND hDlg)
 			fclose(outfile);
 		if (success)
 		{
-			sprintf(buf, "Loaded %s, analyzing...", filename);
+			sprintf(buf, "Loaded %ls, analyzing...", filename);
 			SetWindowText(hwndStatusBar, buf);
 			if (analyze_midi())
 				goto LoadFailed;
-			sprintf(buf, "Loaded %s.", filename);
+			sprintf(buf, "Loaded %ls.", filename);
 			SetWindowText(hwndStatusBar, buf);
-			strcpy(ms.filename, filename);
+			wcscpy(ms.filename, filename);
 			// Enable the "Display Analysis" button
 			EnableWindow(GetDlgItem(hwndApp, IDC_ANALYSIS), ms.perform_analysis);
 			// Enable or disable the "Text" button depending on whether or not text was loaded
@@ -1580,7 +1580,7 @@ int load_midi(char *filename, HWND hDlg)
 		else
 		{
 LoadFailed:
-			sprintf(buf, "Failed to load %s.", extract_filename(filename));
+			sprintf(buf, "Failed to load %ls.", extract_filename(filename));
 			SetWindowText(hwndStatusBar, buf);
 			// Disable the "Display Analysis" button
 			EnableWindow(GetDlgItem(hwndApp, IDC_ANALYSIS), FALSE);
@@ -1910,7 +1910,7 @@ int analyze_midi(void)
 	}
 	// If we haven't decided on a standard, check the filename/path for "MT32" or "MT-32"
 	if (ms.midi_standard == MIDI_STANDARD_NONE && 
-		(stristr(ms.filename, "MT32") || stristr(ms.filename, "MT-32")))
+		(wstristr(ms.filename, L"MT32") || wstristr(ms.filename, L"MT-32")))
 		ms.midi_standard = MIDI_STANDARD_MT32;
 	// Choose an appropriate MIDI standard bitmap
 	if (ms.midi_standard == MIDI_STANDARD_NONE)
@@ -1989,7 +1989,7 @@ void __cdecl playback_thread(void *spointer)
 	}*/
 
 	// Update status line text
-	sprintf(buf, "Playing %s...", extract_filename(ms.filename));
+	sprintf(buf, "Playing %ls...", extract_filename(ms.filename));
 	SetWindowText(hwndStatusBar, buf);
 
 	// Show the default drum kit name on channel 10 if percussion is used by this song..
@@ -2427,7 +2427,7 @@ int process_midi_event(track_header_t *th)
 		{
 			sprintf(buf, "Meta-event %02X at track %d offset %d has length %d, "
 						 "which would exceed track length of %d.\n\n"
-						 "Conclusion: %s is corrupt.", 
+						 "Conclusion: %ls is corrupt.", 
 						 cmd, th->tracknum, cmdptr - th->data, len, th->length, ms.filename);
 			MessageBox(hwndApp, buf, "TMIDI Read Error", MB_ICONERROR);
 			return 1;
@@ -2707,7 +2707,7 @@ int process_midi_event(track_header_t *th)
 						{
 							sprintf(buf, "Sysex data at track %d offset %d has length %d, "
 										 "which would exceed track length of %d.\n\n"
-										 "Conclusion: %s is corrupt.", 
+										 "Conclusion: %ls is corrupt.", 
 										 th->tracknum, cmdptr - th->data, len, th->length, ms.filename);
 							MessageBox(hwndApp, buf, "TMIDI Read Error", MB_ICONERROR);
 							return 1;
@@ -3550,12 +3550,12 @@ INT_PTR CALLBACK AssocDlg(HWND hDlg, UINT iMsg, WPARAM wParam, LPARAM lParam)
 	return FALSE;
 }
 
-playlist_t *playlist_add(char *filename)
+playlist_t *playlist_add(wchar_t *filename)
 {
 	playlist_t *n, *p;
 
 	n = (playlist_t *) malloc(sizeof(playlist_t));
-	strcpy(n->filename, filename);
+	wcscpy(n->filename, filename);
 	n->prev = n->next = NULL;
 	if (!playlist)
 		playlist = n;
@@ -5718,6 +5718,45 @@ char *stristr(char *src, char *target)
 	return NULL;
 }
 
+// Case insensitive wide string search
+wchar_t *wstristr(wchar_t *src, wchar_t *target)
+{
+	wchar_t *found = NULL;
+	wchar_t *sp;
+	wchar_t *tp;
+
+	if (!src || !target)
+		return NULL;
+
+	while (*src)
+	{
+		sp = src;
+		tp = target;
+		found = NULL;
+		while (*sp && *tp)
+		{
+			if (towlower(*sp) == towlower(*tp))
+			{
+				if (!found)
+					found = sp;
+			}
+			else
+			{
+				if (*tp)
+					found = NULL;
+				break;
+			}
+			sp++;
+			tp++;
+		}
+		if (found && !(*tp))
+			return found;
+		src++;
+	}
+
+	return NULL;
+}
+
 // Dumps the given file directly to the MIDI-out device
 int handle_sysex_dump(FILE *fp)
 {
@@ -5728,7 +5767,7 @@ int handle_sysex_dump(FILE *fp)
 	double startTime, endTime, timelen, speed;
 
 	// Read the file
-	sprintf(text, "Reading sysex dump file %s...", ms.filename);
+	sprintf(text, "Reading sysex dump file %ls...", ms.filename);
 	SetWindowText(hwndStatusBar, text);
 	filelen = _filelength(_fileno(fp));
 	if (!filelen)
@@ -5763,7 +5802,7 @@ int handle_sysex_dump(FILE *fp)
 	midiOutPrepareHeader(hout, &mh, sizeof(mh));
 
 	// Send the sysex buffer!
-	sprintf(text, "Sending %s (%d bytes)...", ms.filename, filelen);
+	sprintf(text, "Sending %ls (%d bytes)...", ms.filename, filelen);
 	SetWindowText(hwndStatusBar, text);
 	printf("Sending sysex data...\n");
 	startTime = GetHRTickCount();
@@ -5783,7 +5822,7 @@ int handle_sysex_dump(FILE *fp)
 		speed = 0.0f;
 	else
 		speed = (double) filelen / timelen;
-	sprintf(text, "Finished sending %s (%d bytes) in %.1f seconds (%.0f bytes per second)", 
+	sprintf(text, "Finished sending %ls (%d bytes) in %.1f seconds (%.0f bytes per second)", 
 		extract_filename(ms.filename), filelen, timelen, speed);
 	SetWindowText(hwndStatusBar, text);
 
@@ -5793,9 +5832,9 @@ int handle_sysex_dump(FILE *fp)
 	return 0;
 }
 
-char *extract_filename(char *filename)
+wchar_t *extract_filename(wchar_t *filename)
 {
-	char *ch = strrchr(filename, '\\');
+	wchar_t *ch = wcsrchr(filename, L'\\');
 	if (ch)
 		return ch + 1;
 	else
